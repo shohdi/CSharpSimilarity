@@ -126,6 +126,24 @@ try {
     $partialNameScore = Compare-Names 'Shohdy Mohamed Hussien' $userArabic
     Assert-True ($partialNameScore -lt $fullNameScore) 'A missing surname should score below the full-name match.'
 
+    $organizationShort = 'Cavalier Dynamics Technologies'
+    $organizationEnglish = 'Cavalier Dynamics for Technologies Company'
+    $organizationArabic = 'شركة كافاليير دايناميكس للتقنيات'
+    $organizationRecord = $organizationEnglish + ' ' + $organizationArabic
+    $organizationRecordScore = Compare-Names $organizationShort $organizationRecord
+    Assert-True ($organizationRecordScore -ge 85) 'The short organization name should strongly match its complete bilingual source record.'
+    Assert-True ((Compare-Names $organizationRecord $organizationShort) -eq $organizationRecordScore) 'Organization matching should be symmetric.'
+    Assert-True ((Compare-Names $organizationShort $organizationEnglish) -gt 70) 'English connectors and a legal suffix should not prevent the organization match.'
+    $organizationArabicScore = Compare-Names $organizationShort $organizationArabic
+    Assert-True ($organizationArabicScore -gt 70) 'The Arabic-only organization name should match its English transliteration and sector.'
+    Assert-True ((Compare-Names $organizationShort 'Frontier Dynamics Technologies') -lt 70) 'Shared organization terminology should not hide a different core brand.'
+    Assert-True ((Compare-Names $organizationShort 'Atlantic Mercury Technologies') -lt 70) 'A shared technology sector should not match unrelated brands.'
+    Assert-True ((Compare-Names $organizationShort 'Cavalier Dynamics Construction Company') -lt 90) 'A different explicit sector should retain a penalty for the same brand.'
+    Assert-True ((Compare-Names ($organizationShort + ' 12') ($organizationEnglish + ' 13')) -lt 95) 'Different organization identifiers must not become a near-certain match.'
+    Assert-True ((Compare-Names $organizationShort ($organizationEnglish + ' شركة فرونتير دايناميكس للتقنيات')) -lt 70) 'A contradictory Arabic brand must not disappear from the source record.'
+    Assert-True ((Compare-Names 'Cavalier Dynamics Bank' ($organizationEnglish + ' شركة كافاليير دايناميكس')) -lt 90) 'An alias without a sector must retain the sector stated elsewhere in the source record.'
+    Assert-True ((Compare-Names 'Cavalier for Dynamics كافاليير دايناميكس' $organizationShort) -gt 70) 'A bilingual customer name without legal or sector wording must be selectable in organization context.'
+
     Assert-BadRequest '/IsSame'
     Assert-BadRequest '/IsSame?first_name=Ahmed'
     Assert-BadRequest '/IsSame?first_name=&second_name=Ahmed'
@@ -134,7 +152,9 @@ try {
     Assert-BadRequest ('/IsSame?first_name=' + ('a' * 257) + '&second_name=Ahmed')
     # 127 one-token words fit the character limit but exceed CLS/SEP + 126 name tokens.
     Assert-BadRequest ('/IsSame?first_name=' + [Uri]::EscapeDataString(('a ' * 126) + 'a') + '&second_name=Ahmed')
-    $casedBilingualLimit = (('aHmEd ' * 22) + 'aHmEd') + ' ' + (('احمد ' * 22) + 'احمد')
+    # LaBSE: each mixed-case English word has six pieces; each Arabic word one.
+    # Both aliases fit separately, but the full 246-character field is 135 tokens.
+    $casedBilingualLimit = (('mOhAmEd ' * 18) + 'mOhAmEd') + ' ' + (('محمد ' * 18) + 'محمد')
     Assert-BadRequest ('/IsSame?first_name=' + [Uri]::EscapeDataString($casedBilingualLimit) + '&second_name=Ahmed')
 
     # All requests are started before awaiting results to exercise concurrent inference.
@@ -150,7 +170,7 @@ try {
         $score = Read-Comparison ($pending[$index].GetAwaiter().GetResult()) $pairs[$index][0] $pairs[$index][1]
         if ($index -eq 0 -or $index -eq 3) { Assert-True ($score -eq $example) 'Concurrent responses were inconsistent.' }
     }
-    Write-Host "Smoke tests passed. shohdi: $example%; full English/Arabic: $fullNameScore%; bilingual/Arabic: $bilingualArabicScore%; bilingual/English: $bilingualEnglishScore%."
+    Write-Host "Smoke tests passed. shohdi: $example%; full English/Arabic: $fullNameScore%; bilingual/Arabic: $bilingualArabicScore%; bilingual/English: $bilingualEnglishScore%; organization source record: $organizationRecordScore%; organization Arabic: $organizationArabicScore%."
 }
 catch {
     if ($null -ne $server) {

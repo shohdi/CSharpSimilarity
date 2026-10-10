@@ -12,6 +12,10 @@ Models/*.onnx
 Models/*.safetensors
 Models/tokenizer.json
 Models/.*.tmp
+Models/LaBSE/*.onnx
+Models/LaBSE/*.safetensors
+Models/LaBSE/tokenizer.json
+Models/LaBSE/.*.tmp
 
 # Local Python environments are never required by this project.
 .venv/

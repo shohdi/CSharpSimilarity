@@ -5,7 +5,7 @@ using System.Text.Json;
 namespace CSharpSimilarity.Inference;
 
 /// <summary>
-/// The cased BERT tokenizer used by distiluse-base-multilingual-cased-v2.
+/// The cased BERT WordPiece tokenizer used by LaBSE and the reference fixtures.
 /// Its vocabulary and configuration come from the local Hugging Face tokenizer.json.
 /// </summary>
 internal sealed class WordPieceTokenizer

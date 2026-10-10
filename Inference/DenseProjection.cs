@@ -10,9 +10,13 @@ internal sealed class DenseProjection
     public const int OutputDimensions = 512;
     private readonly float[] _weights;
     private readonly float[] _bias;
+    private readonly int _inputDimensions;
+    private readonly int _outputDimensions;
 
-    public DenseProjection(string path)
+    public DenseProjection(string path, int inputDimensions = InputDimensions, int outputDimensions = OutputDimensions)
     {
+        _inputDimensions = inputDimensions;
+        _outputDimensions = outputDimensions;
         var bytes = File.ReadAllBytes(path);
         if (bytes.Length < 8)
             throw new InvalidDataException("Invalid safetensors file.");
@@ -21,8 +25,8 @@ internal sealed class DenseProjection
             throw new InvalidDataException("Invalid safetensors header.");
         using var header = JsonDocument.Parse(bytes.AsMemory(8, headerLength));
         var dataStart = 8 + headerLength;
-        _bias = ReadTensor(header.RootElement.GetProperty("linear.bias"), [OutputDimensions]);
-        _weights = ReadTensor(header.RootElement.GetProperty("linear.weight"), [OutputDimensions, InputDimensions]);
+        _bias = ReadTensor(header.RootElement.GetProperty("linear.bias"), [outputDimensions]);
+        _weights = ReadTensor(header.RootElement.GetProperty("linear.weight"), [outputDimensions, inputDimensions]);
 
         float[] ReadTensor(JsonElement tensor, int[] shape)
         {
@@ -44,15 +48,15 @@ internal sealed class DenseProjection
 
     public float[] Project(ReadOnlySpan<float> pooled)
     {
-        if (pooled.Length != InputDimensions)
+        if (pooled.Length != _inputDimensions)
             throw new InvalidDataException("Unexpected embedding dimension.");
-        var result = new float[OutputDimensions];
+        var result = new float[_outputDimensions];
         double squaredNorm = 0;
-        for (var row = 0; row < OutputDimensions; row++)
+        for (var row = 0; row < _outputDimensions; row++)
         {
             double value = _bias[row];
-            var offset = row * InputDimensions;
-            for (var column = 0; column < InputDimensions; column++)
+            var offset = row * _inputDimensions;
+            for (var column = 0; column < _inputDimensions; column++)
                 value += _weights[offset + column] * pooled[column];
             result[row] = (float)Math.Tanh(value);
             squaredNorm += result[row] * result[row];

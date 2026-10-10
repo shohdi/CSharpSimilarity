@@ -13,8 +13,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="Models/model_quantized.onnx;Models/dense.safetensors" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Update="Models/tokenizer.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Remove="Models/**/*" />
+    <Content Include="Models/LaBSE/model_quantized.onnx;Models/LaBSE/dense.safetensors;Models/LaBSE/tokenizer.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Compile Remove="tests/**/*.cs;.tools/**/*.cs" />
     <Content Remove="tests/**/*;.tools/**/*" />
     <None Remove=".tools/**/*" />

@@ -12,7 +12,10 @@
     <Compile Include="../Inference/DenseProjection.cs" Link="DenseProjection.cs" />
     <Compile Include="../Matching/NameNormalizer.cs" Link="NameNormalizer.cs" />
     <Compile Include="../Matching/NameLexicalMatcher.cs" Link="NameLexicalMatcher.cs" />
+    <Compile Include="../Matching/OrganizationNameMatcher.cs" Link="OrganizationNameMatcher.cs" />
     <None Include="tokenizer-fixtures.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="dense-fixture.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="labse-dense-fixture.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="labse-tokenizer-fixtures.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

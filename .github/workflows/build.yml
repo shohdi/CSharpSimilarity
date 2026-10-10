@@ -23,7 +23,7 @@ jobs:
         run: dotnet restore CSharpSimilarity.csproj
       - name: Download verified model assets
         shell: pwsh
-        run: ./scripts/download-model.ps1
+        run: ./scripts/download-model.ps1 -IncludeTestAssets
       - name: Build
         run: dotnet build CSharpSimilarity.csproj --configuration Release --no-restore
       - name: Check tokenizer and projection fixtures

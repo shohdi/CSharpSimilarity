@@ -42,6 +42,30 @@ Check(casedBilingualLimit.Length <= 256, "The cased bilingual token-limit fixtur
 Reject<ArgumentException>(() => tokenizer.Encode(casedBilingualLimit),
     "The complete cased bilingual field must exceed the token limit, even when either alias fits separately.");
 
+var labseTokenizer = new WordPieceTokenizer(Path.Combine(projectRoot, "Models", "LaBSE", "tokenizer.json"));
+using (var fixtures = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "labse-tokenizer-fixtures.json"))))
+{
+    foreach (var fixture in fixtures.RootElement.EnumerateArray())
+    {
+        var text = fixture.GetProperty("text").GetString()!;
+        var expected = fixture.GetProperty("input_ids").EnumerateArray().Select(x => x.GetInt64());
+        // Capture the complete tokenization first; the endpoint's stricter 128-token
+        // limit is checked separately, including for a verified bilingual alias.
+        Check(expected.SequenceEqual(labseTokenizer.Encode(text, 256)),
+            $"Independent LaBSE tokenizer fixture: {JsonSerializer.Serialize(text)}");
+    }
+}
+var labseEnglishLimit = string.Join(' ', Enumerable.Repeat("mOhAmEd", 19));
+var labseArabicLimit = string.Join(' ', Enumerable.Repeat("محمد", 19));
+var labseBilingualLimit = labseEnglishLimit + " " + labseArabicLimit;
+Check(labseBilingualLimit.Length <= 256, "The LaBSE bilingual limit fixture must fit the API character limit.");
+Check(labseTokenizer.Encode(labseEnglishLimit).Length == 116 && labseTokenizer.Encode(labseArabicLimit).Length == 21,
+    "Each alias individually must fit the model's 128-token service limit.");
+Check(labseTokenizer.Encode(labseBilingualLimit, 256).Length == 135,
+    "The complete original LaBSE bilingual field must have 135 tokens including CLS/SEP.");
+Reject<ArgumentException>(() => labseTokenizer.Encode(labseBilingualLimit),
+    "The complete LaBSE bilingual field must reject rather than bypass its token limit through alias selection.");
+
 Check(NameNormalizer.Normalize(" شَـهْدِي ") == "شهدي", "Arabic diacritics and tatweel are normalized.");
 Check(NameNormalizer.Normalize("أحمد إِبراهيم") == "احمد ابراهيم", "Arabic alef variants normalize consistently.");
 Check(NameNormalizer.Normalize("François  O’Connor") == "francois o connor", "Latin accents, case and punctuation normalize.");
@@ -50,6 +74,8 @@ Check(NameNormalizer.Normalize(null) == "", "Null is an empty normalized name.")
 Check(NameNormalizer.ContainsArabic("شهدي") && !NameNormalizer.ContainsArabic("shohdi"), "Arabic script detection.");
 
 var matcher = new NameLexicalMatcher();
+Check(matcher.Compare(labseBilingualLimit, labseArabicLimit).EquivalentAliasMatch,
+    "The LaBSE full-field limit example must be a verified bilingual alias so it exercises validation before alias selection.");
 var lexicalCases = new (string First, string Second, double Minimum, double Maximum, bool Phonetic)[]
 {
     ("shohdi", "شهدي", .98, 1, true),
@@ -138,6 +164,95 @@ var fullNameScore = matcher.Compare(userEnglish, userArabic).Similarity;
 Check(matcher.Compare("Shohdy Mohamed Hussien", userArabic).Similarity < fullNameScore,
     "Matching only part of the full name must score below matching all its components.");
 
+const string organizationShort = "Cavalier Dynamics Technologies";
+const string organizationEnglish = "Cavalier Dynamics for Technologies Company";
+const string organizationArabic = "شركة كافاليير دايناميكس للتقنيات";
+var organizationRecord = organizationEnglish + " " + organizationArabic;
+var organizationMatcher = new OrganizationNameMatcher();
+var organizationCases = new (string First, string Second, double Minimum, double Maximum, string Description)[]
+{
+    (organizationShort, organizationRecord, .90, 1, "Short organization name versus its complete bilingual source record"),
+    (organizationShort, organizationEnglish, .90, 1, "English organization connectors and legal suffix"),
+    (organizationShort, organizationArabic, .80, 1, "Arabic-only organization transliteration and sector translation"),
+    (organizationShort, "Frontier Dynamics Technologies", 0, .69, "Shared organization terminology cannot erase a different core brand"),
+    (organizationShort, "Atlantic Mercury Technologies", 0, .69, "A shared sector does not match unrelated brands"),
+    (organizationShort, "Cavalier Dynamics Construction Company", 0, .89, "Different explicit sectors retain a penalty for the same brand"),
+    (organizationShort + " 12", organizationEnglish + " 13", 0, .45, "Organization identifiers must retain mismatches")
+};
+foreach (var item in organizationCases)
+{
+    var forward = organizationMatcher.Compare(item.First, item.Second);
+    var reverse = organizationMatcher.Compare(item.Second, item.First);
+    Check(forward.Applicable && reverse.Applicable, $"Organization comparison is applicable: {item.Description}.");
+    Check(forward.Similarity >= item.Minimum && forward.Similarity <= item.Maximum,
+        $"{item.Description}: {forward.Similarity:R} outside [{item.Minimum}, {item.Maximum}].");
+    Check(Math.Abs(forward.Similarity - reverse.Similarity) < 1e-12,
+        $"{item.Description} must produce a symmetric organization signal.");
+}
+Check(organizationMatcher.Compare(organizationShort + " 12", organizationEnglish + " 13").ConflictingIdentifiers,
+    "Conflicting organization identifiers must be explicitly retained in the matching result.");
+Check(organizationMatcher.Compare(organizationShort, "Cavalier Dynamics Construction Company").ConflictingSectors,
+    "An explicit technology/construction difference must remain visible to the final scorer.");
+
+var conflictingCompanyBrand = organizationEnglish + " شركة فرونتير دايناميكس للتقنيات";
+var conflictingCompanyIds = organizationEnglish + " 12 " + organizationArabic + " 13";
+var conflictingCompanySector = organizationEnglish + " شركة كافاليير دايناميكس المصرفية";
+var oneAliasCompanyId = organizationEnglish + " 12 " + organizationArabic;
+var organizationAliasCases = new (string Source, double Maximum, bool Brand, bool Identifiers, bool Sectors, string Description)[]
+{
+    (conflictingCompanyBrand, .69, true, false, false, "Different distinctive brands inside the bilingual company field"),
+    (conflictingCompanyIds, .45, false, true, false, "Conflicting identifiers inside bilingual company aliases"),
+    (conflictingCompanySector, .79, false, false, true, "Technology and banking sectors inside the company aliases conflict"),
+    (oneAliasCompanyId, .45, false, true, false, "An identifier present in only one company alias cannot disappear")
+};
+foreach (var item in organizationAliasCases)
+{
+    var forward = organizationMatcher.Compare(organizationShort, item.Source);
+    var reverse = organizationMatcher.Compare(item.Source, organizationShort);
+    Check(forward.Similarity <= item.Maximum && reverse.Similarity <= item.Maximum,
+        $"{item.Description} must retain a penalty in either comparison direction.");
+    Check(Math.Abs(forward.Similarity - reverse.Similarity) < 1e-12,
+        $"{item.Description} must produce a symmetric score.");
+    Check(!item.Brand || forward.ConflictingDistinctiveNames && reverse.ConflictingDistinctiveNames,
+        $"{item.Description} must retain its distinctive-brand conflict flag.");
+    Check(!item.Identifiers || forward.ConflictingIdentifiers && reverse.ConflictingIdentifiers,
+        $"{item.Description} must retain its identifier conflict flag.");
+    Check(!item.Sectors || forward.ConflictingSectors && reverse.ConflictingSectors,
+        $"{item.Description} must retain its sector conflict flag.");
+    var candidates = organizationMatcher.GetCandidateNames(item.Source);
+    Check(candidates.Count == 1 && candidates[0].Name == item.Source && !candidates[0].IsVerifiedAlias,
+        $"{item.Description} must preserve the entire original field for semantic inference.");
+}
+var consistentCompanyCandidates = organizationMatcher.GetCandidateNames(organizationRecord);
+Check(consistentCompanyCandidates.Count == 2 && consistentCompanyCandidates.All(candidate => candidate.IsVerifiedAlias),
+    "A verified bilingual company field exposes both complete aliases.");
+Check(consistentCompanyCandidates.Any(candidate => candidate.Name == organizationEnglish &&
+        candidate.SemanticName == "Cavalier Dynamics Technologies"),
+    "The English company model input preserves the brand and sector while removing connectors and legal suffixes.");
+Check(consistentCompanyCandidates.Any(candidate => candidate.Name == organizationArabic &&
+        candidate.SemanticName == "كافاليير دايناميكس تقنيات"),
+    "The Arabic company model input preserves the brand and sector while removing company wrappers and attached function prefixes.");
+var missingSectorSource = organizationEnglish + " شركة كافاليير دايناميكس";
+var bankTarget = "Cavalier Dynamics Bank";
+var missingSectorMatch = organizationMatcher.Compare(bankTarget, missingSectorSource);
+Check(missingSectorMatch.ConflictingSectors && missingSectorMatch.Similarity <= .79,
+    "A sector-free alias cannot hide the technology/banking conflict in the original bilingual record.");
+Check(organizationMatcher.Compare(missingSectorSource, bankTarget).ConflictingSectors &&
+    organizationMatcher.Compare(missingSectorSource, bankTarget).Similarity <= .79,
+    "A sector-free alias must preserve the same conflict when the company comparison is reversed.");
+foreach (var function in new[] { "for", "of" })
+{
+    var markerFreeCompany = $"Cavalier Dynamics {function} كافاليير دايناميكس";
+    var selected = organizationMatcher.Compare(markerFreeCompany, organizationShort);
+    var candidates = organizationMatcher.GetCandidateNames(markerFreeCompany);
+    Check(candidates.Count == 2 && candidates.All(candidate => candidate.IsVerifiedAlias),
+        $"Marker-free bilingual organization aliases with '{function}' use consistent organization parsing.");
+    Check(candidates.Any(candidate => candidate.Name == selected.MatchedFirstName),
+        $"The selected marker-free organization alias with '{function}' must exist in the candidates supplied to semantic inference.");
+    Check(candidates.All(candidate => !candidate.SemanticName.Split(' ').Contains(function)),
+        $"Semantic organization inputs remove the '{function}' wrapper while retaining the complete source alias.");
+}
+
 var dense = new DenseProjection(Path.Combine(projectRoot, "Models", "dense.safetensors"));
 using (var fixture = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "dense-fixture.json"))))
 {
@@ -150,6 +265,23 @@ using (var fixture = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext
     Check(Math.Abs(actual.Sum(x => (double)x * x) - 1) < 1e-6, "Dense output must have unit L2 norm.");
 }
 Reject<InvalidDataException>(() => dense.Project(new float[767]), "An invalid Dense input shape must reject.");
+
+var labseDense = new DenseProjection(Path.Combine(projectRoot, "Models", "LaBSE", "dense.safetensors"), 768, 768);
+using (var fixture = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "labse-dense-fixture.json"))))
+{
+    // This independent reference checks the full 768-dimensional LaBSE projection,
+    // including matrix layout, bias, tanh and normalization after CLS pooling.
+    var input = fixture.RootElement.GetProperty("cls_input").EnumerateArray().Select(x => x.GetSingle()).ToArray();
+    var expected = fixture.RootElement.GetProperty("expected_embedding").EnumerateArray().Select(x => x.GetDouble()).ToArray();
+    var actual = labseDense.Project(input);
+    var maxError = actual.Zip(expected, (value, reference) => Math.Abs(value - reference)).Max();
+    Check(actual.Length == 768 && expected.Length == 768,
+        "LaBSE Dense projection must preserve 768 dimensions after CLS pooling.");
+    Check(maxError < 1e-6, $"Independent LaBSE Dense+tanh+L2 reference: maximum error {maxError:R}.");
+    Check(Math.Abs(actual.Sum(x => (double)x * x) - 1) < 1e-6, "LaBSE Dense output must have unit L2 norm.");
+    Console.WriteLine($"LaBSE projection reference maximum absolute error: {maxError:R}.");
+}
+Reject<InvalidDataException>(() => labseDense.Project(new float[767]), "An invalid LaBSE Dense input shape must reject.");
 
 Console.WriteLine($"{checks - failures.Count}/{checks} checks passed.");
 foreach (var failure in failures) Console.Error.WriteLine($"FAIL: {failure}");

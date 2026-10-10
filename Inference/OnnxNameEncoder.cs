@@ -5,7 +5,8 @@ namespace CSharpSimilarity.Inference;
 
 public sealed class OnnxNameEncoder : IDisposable
 {
-    public const string ModelName = "sentence-transformers/distiluse-base-multilingual-cased-v2";
+    public const string ModelName = "sentence-transformers/LaBSE";
+    public const int EmbeddingDimensions = 768;
     private readonly InferenceSession _session;
     private readonly WordPieceTokenizer _tokenizer;
     private readonly DenseProjection _projection;
@@ -13,13 +14,13 @@ public sealed class OnnxNameEncoder : IDisposable
 
     public OnnxNameEncoder(IHostEnvironment environment, IConfiguration configuration, ILogger<OnnxNameEncoder> logger)
     {
-        var configured = configuration["Similarity:ModelDirectory"] ?? "Models";
+        var configured = configuration["Similarity:ModelDirectory"] ?? "Models/LaBSE";
         var directory = Path.GetFullPath(configured, environment.ContentRootPath);
-        var model = VerifiedFile("model_quantized.onnx", "1724c10ba3b33b58afb6ce73bbf3e0528921bd4d4e1bf5a569b6d73f234e72bf");
-        var tokenizer = VerifiedFile("tokenizer.json", "bf1b59b7b11c95f194f51708d918eea378e09d05f84c0e1656dc5180e8117088");
-        var dense = VerifiedFile("dense.safetensors", "0a21b1ce908e772ebf09f93c20ca09524c32706e9918d9c0169a3f0663b191ed");
+        var model = VerifiedFile("model_quantized.onnx", "2d209704455c8e5718dbef9c46ca22c823eb35256b74b4122d90845310c7ef82");
+        var tokenizer = VerifiedFile("tokenizer.json", "09216b42d2697b7b4a26ac05ff09ba8bf52dc19b896c5ceee8bbff9f39055322");
+        var dense = VerifiedFile("dense.safetensors", "f866c945fa2147ce4940c8ead0b4b20af4217e0f4664bd35f41c2a0967c4fe77");
         _tokenizer = new WordPieceTokenizer(tokenizer);
-        _projection = new DenseProjection(dense);
+        _projection = new DenseProjection(dense, EmbeddingDimensions, EmbeddingDimensions);
         using var options = new Microsoft.ML.OnnxRuntime.SessionOptions
         {
             GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
@@ -27,10 +28,10 @@ public sealed class OnnxNameEncoder : IDisposable
             InterOpNumThreads = 1
         };
         _session = new InferenceSession(model, options);
-        if (!_session.InputMetadata.Keys.Order().SequenceEqual(new[] { "attention_mask", "input_ids" }) ||
+        if (!_session.InputMetadata.Keys.Order().SequenceEqual(new[] { "attention_mask", "input_ids", "token_type_ids" }) ||
             !_session.OutputMetadata.ContainsKey("last_hidden_state"))
             throw new InvalidDataException("The local ONNX model has unexpected inputs/outputs.");
-        logger.LogInformation("Loaded multilingual name model for local CPU inference ({Dimensions} dimensions).", DenseProjection.OutputDimensions);
+        logger.LogInformation("Loaded {Model} for local CPU inference ({Dimensions} dimensions).", ModelName, EmbeddingDimensions);
 
         string VerifiedFile(string filename, string expectedHash)
         {
@@ -74,26 +75,18 @@ public sealed class OnnxNameEncoder : IDisposable
         Array.Fill(mask, 1L, sequenceLength, second.Length);
         using var inputIds = OrtValue.CreateTensorValueFromMemory(ids, [2, sequenceLength]);
         using var attentionMask = OrtValue.CreateTensorValueFromMemory(mask, [2, sequenceLength]);
-        var inputs = new Dictionary<string, OrtValue> { ["input_ids"] = inputIds, ["attention_mask"] = attentionMask };
+        using var tokenTypes = OrtValue.CreateTensorValueFromMemory(new long[ids.Length], [2, sequenceLength]);
+        var inputs = new Dictionary<string, OrtValue> { ["input_ids"] = inputIds, ["attention_mask"] = attentionMask, ["token_type_ids"] = tokenTypes };
         using var runOptions = new RunOptions();
         using var output = _session.Run(runOptions, inputs, ["last_hidden_state"]);
         var shape = output[0].GetTensorTypeAndShape();
-        if (!shape.Shape.SequenceEqual(new long[] { 2, sequenceLength, DenseProjection.InputDimensions }))
+        if (!shape.Shape.SequenceEqual(new long[] { 2, sequenceLength, EmbeddingDimensions }))
             throw new InvalidDataException("Unexpected ONNX output shape.");
         var hidden = output[0].GetTensorDataAsSpan<float>();
-        var firstPooled = new float[DenseProjection.InputDimensions];
-        var secondPooled = new float[DenseProjection.InputDimensions];
-        for (var row = 0; row < 2; row++)
-        {
-            var tokenCount = row == 0 ? first.Length : second.Length;
-            var pooled = row == 0 ? firstPooled : secondPooled;
-            for (var token = 0; token < tokenCount; token++)
-            {
-                var offset = (row * sequenceLength + token) * DenseProjection.InputDimensions;
-                for (var dimension = 0; dimension < pooled.Length; dimension++)
-                    pooled[dimension] += hidden[offset + dimension] / tokenCount;
-            }
-        }
+        // LaBSE uses CLS pooling, followed by its trained Dense layer.
+        // DistilUSE's mean-pooling rule is not valid for this model.
+        var firstPooled = hidden[..EmbeddingDimensions].ToArray();
+        var secondPooled = hidden.Slice(sequenceLength * EmbeddingDimensions, EmbeddingDimensions).ToArray();
         var firstEmbedding = _projection.Project(firstPooled);
         var secondEmbedding = _projection.Project(secondPooled);
         double cosine = 0;

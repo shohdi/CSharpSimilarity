@@ -16,6 +16,7 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 builder.Services.AddProblemDetails();
 builder.Services.AddSingleton<OnnxNameEncoder>();
 builder.Services.AddSingleton<NameLexicalMatcher>();
+builder.Services.AddSingleton<OrganizationNameMatcher>();
 builder.Services.AddSingleton<NameSimilarityService>();
 
 var app = builder.Build();
