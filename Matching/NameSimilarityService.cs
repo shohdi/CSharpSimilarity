@@ -6,14 +6,20 @@ public sealed class NameSimilarityService(OnnxNameEncoder encoder, NameLexicalMa
 {
     public async Task<int> CompareAsync(string first, string second, CancellationToken cancellationToken)
     {
-        var normalizedFirst = NameNormalizer.Normalize(first);
-        var normalizedSecond = NameNormalizer.Normalize(second);
+        // Validate the complete submitted fields before selecting equivalent
+        // aliases, so splitting does not bypass the original input limits.
+        encoder.ValidateName(first);
+        encoder.ValidateName(second);
         var lexical = matcher.Compare(first, second);
-        // Run the real model for every valid pair, including transliteration matches.
-        var cosine = await encoder.CosineSimilarityAsync(normalizedFirst, normalizedSecond, cancellationToken);
+        // Embed the matched complete variants, not both translations joined
+        // together. Run the real model for every valid pair.
+        var cosine = await encoder.CosineSimilarityAsync(
+            lexical.MatchedFirstName ?? first,
+            lexical.MatchedSecondName ?? second,
+            cancellationToken);
         if (lexical.ExactNormalizedMatch)
             return 100;
-        if (lexical.CrossScriptPhoneticMatch)
+        if (lexical.CrossScriptPhoneticMatch || lexical.EquivalentAliasMatch)
             return 99;
 
         // A general sentence model can make unrelated personal names look similar.

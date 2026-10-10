@@ -36,6 +36,11 @@ Check(tokenizer.Encode(string.Join(' ', Enumerable.Repeat("Ali", 126))).Length =
 Reject<ArgumentException>(() => tokenizer.Encode(string.Join(' ', Enumerable.Repeat("Ali", 127))),
     "A name longer than the model limit must reject instead of silently truncating.");
 Reject<ArgumentOutOfRangeException>(() => tokenizer.Encode("Ali", 1), "A token limit without room for CLS/SEP must reject.");
+var casedBilingualLimit = string.Join(' ', Enumerable.Repeat("aHmEd", 23)) + " " +
+    string.Join(' ', Enumerable.Repeat("احمد", 23));
+Check(casedBilingualLimit.Length <= 256, "The cased bilingual token-limit fixture must fit the API character limit.");
+Reject<ArgumentException>(() => tokenizer.Encode(casedBilingualLimit),
+    "The complete cased bilingual field must exceed the token limit, even when either alias fits separately.");
 
 Check(NameNormalizer.Normalize(" شَـهْدِي ") == "شهدي", "Arabic diacritics and tatweel are normalized.");
 Check(NameNormalizer.Normalize("أحمد إِبراهيم") == "احمد ابراهيم", "Arabic alef variants normalize consistently.");
@@ -80,6 +85,58 @@ foreach (var item in lexicalCases)
 }
 Check(matcher.Compare("شَـهْدِي", "شهدي").ExactNormalizedMatch, "Normalized-equivalent Arabic names are exact.");
 Check(matcher.Compare("Ahmed Hassan", "Hassan Ahmed").Similarity >= .99, "Word order is tolerated when all tokens match.");
+
+// A bilingual source field repeats the full name; it must not be treated as
+// eight independent name components, or accepted when its two halves conflict.
+const string userEnglish = "Shohdy Mohamed Hussien ElSheemy";
+const string userArabic = "شهدي محمد حسين الشيمي";
+var bilingualName = userEnglish + " " + userArabic;
+var nameRegressions = new (string First, string Second, double Minimum, double Maximum, string Description)[]
+{
+    (userEnglish, userArabic, .94, 1, "Full English/Arabic name transliteration"),
+    (bilingualName, userArabic, .98, 1, "Bilingual full name versus its Arabic alias"),
+    (bilingualName, userEnglish, .98, 1, "Bilingual full name versus its English alias"),
+    (userArabic + " " + userEnglish, userArabic, .98, 1, "Arabic-first bilingual full name"),
+    ("Ahmed Hassan أحمد حسن", "أحمد حسن", .98, 1, "Bilingual alias recognition also generalizes to another full name"),
+    ("Ahmed Hassan 12 أحمد حسن ١٢", "أحمد حسن 12", .98, 1, "Consistent numeric identifiers survive bilingual alias selection"),
+    (userEnglish, "Shohdy Mohamed Hussein ElSheemy", .90, 1, "Hussein/Hussien spelling variation"),
+    (userEnglish, "Shohdy Mohamed Hussien El Sheemy", .90, 1, "Detached surname article"),
+    (userEnglish, "Shohdy Mohamed Hussein Al Shimi", .90, 1, "Alternative surname transliteration"),
+    (userEnglish, "شهدي محمد حسين الحسيني", 0, .92, "Different surnames must retain their penalty"),
+    (userEnglish, "Ahmed Mohamed Hussien ElSheemy", 0, .92, "Shared surname does not erase a different first name"),
+    ("Ahmed Hassan محمد علي", "محمد علي", 0, .92, "Contradictory concatenated aliases cannot collapse to the matching half"),
+    ("Ahmed Hassan محمد علي", "Ahmed Hassan", 0, .92, "Contradictory aliases cannot collapse to the English half either"),
+    (userEnglish + " شهدي محمد حسين الحسيني", userArabic, 0, .92, "A single conflicting surname prevents bilingual alias collapse"),
+    (bilingualName + " 12", userArabic, 0, .92, "An identifier in only one bilingual half cannot disappear"),
+    ("Ahmed Hassan 12 أحمد حسن 13", "أحمد حسن 13", 0, .92, "Conflicting identifiers inside the alias halves prevent collapse"),
+    (userEnglish + " شهدي محمد حسين", userEnglish, 0, .92, "An incomplete Arabic half is not a complete alias of the English name"),
+    (userEnglish + " شهدي محمد حسين", userArabic, 0, .92, "An incomplete bilingual field cannot discard the missing surname"),
+    (bilingualName + " 12", userArabic + " 13", 0, .92, "Bilingual alias handling must preserve numeric identifiers"),
+    ("Shohdy Mohamed Hussien", userArabic, 0, .85, "A missing surname remains a partial match")
+};
+foreach (var item in nameRegressions)
+{
+    var forward = matcher.Compare(item.First, item.Second);
+    var reverse = matcher.Compare(item.Second, item.First);
+    Check(forward.Similarity >= item.Minimum && forward.Similarity <= item.Maximum,
+        $"{item.Description}: {forward.Similarity:R} outside [{item.Minimum}, {item.Maximum}].");
+    Check(Math.Abs(forward.Similarity - reverse.Similarity) < 1e-12,
+        $"{item.Description} must have a symmetric lexical score.");
+    if (item.Maximum < .95)
+        Check(!forward.CrossScriptPhoneticMatch && !reverse.CrossScriptPhoneticMatch &&
+            !forward.EquivalentAliasMatch && !reverse.EquivalentAliasMatch,
+            $"{item.Description} must not receive a complete-transliteration or equivalent-alias flag.");
+}
+
+var selectedEnglishAlias = matcher.Compare(bilingualName, userEnglish);
+Check(selectedEnglishAlias.MatchedFirstName == userEnglish,
+    "The selected English alias must preserve source casing for the cased embedding model.");
+Check(selectedEnglishAlias.MatchedSecondName == userEnglish,
+    "The model's corresponding target name must preserve source casing too.");
+
+var fullNameScore = matcher.Compare(userEnglish, userArabic).Similarity;
+Check(matcher.Compare("Shohdy Mohamed Hussien", userArabic).Similarity < fullNameScore,
+    "Matching only part of the full name must score below matching all its components.");
 
 var dense = new DenseProjection(Path.Combine(projectRoot, "Models", "dense.safetensors"));
 using (var fixture = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "dense-fixture.json"))))

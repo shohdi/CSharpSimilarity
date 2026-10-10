@@ -44,6 +44,8 @@ public sealed class OnnxNameEncoder : IDisposable
         }
     }
 
+    public void ValidateName(string name) => _ = _tokenizer.Encode(name);
+
     public async Task<double> CosineSimilarityAsync(string first, string second, CancellationToken cancellationToken)
     {
         var firstIds = _tokenizer.Encode(first);

@@ -93,6 +93,39 @@ try {
     Assert-True ((Compare-Names 'mohamed ali' 'محمد علي') -ge 85) 'A common transliteration should be a strong match.'
     Assert-True ((Compare-Names 'Ahmed Hassan' 'Victoria Brown') -lt 50) 'Clearly different names should have a low score.'
 
+    $userEnglish = 'Shohdy Mohamed Hussien ElSheemy'
+    $userArabic = 'شهدي محمد حسين الشيمي'
+    $bilingualName = $userEnglish + ' ' + $userArabic
+    $fullNameScore = Compare-Names $userEnglish $userArabic
+    Assert-True ($fullNameScore -ge 90) 'The complete English/Arabic name should remain a strong match.'
+    Assert-True ((Compare-Names $userArabic $userEnglish) -eq $fullNameScore) 'The complete English/Arabic score should be symmetric.'
+
+    $bilingualArabicScore = Compare-Names $bilingualName $userArabic
+    Assert-True ($bilingualArabicScore -ge 98) 'A consistent bilingual full name should match its Arabic alias.'
+    Assert-True ((Compare-Names $userArabic $bilingualName) -eq $bilingualArabicScore) 'The bilingual/Arabic score should be symmetric.'
+    $bilingualEnglishScore = Compare-Names $bilingualName $userEnglish
+    Assert-True ($bilingualEnglishScore -ge 95) 'A consistent bilingual full name should match its English alias.'
+    Assert-True ((Compare-Names $userEnglish $bilingualName) -eq $bilingualEnglishScore) 'The bilingual/English score should be symmetric.'
+    Assert-True ((Compare-Names ($userArabic + ' ' + $userEnglish) $userArabic) -ge 98) 'The bilingual alias order should not reduce the match.'
+    Assert-True ((Compare-Names 'Ahmed Hassan أحمد حسن' 'أحمد حسن') -ge 98) 'Bilingual alias recognition should generalize to another full name.'
+    Assert-True ((Compare-Names 'Ahmed Hassan 12 أحمد حسن ١٢' 'أحمد حسن 12') -ge 98) 'Consistent numeric identifiers should survive bilingual alias selection.'
+
+    foreach ($variant in @('Shohdy Mohamed Hussein ElSheemy', 'Shohdy Mohamed Hussien El Sheemy', 'Shohdy Mohamed Hussein Al Shimi')) {
+        Assert-True ((Compare-Names $userEnglish $variant) -ge 90) 'Common English spelling/article alternatives should remain strong matches.'
+    }
+    Assert-True ((Compare-Names $userEnglish 'شهدي محمد حسين الحسيني') -lt 95) 'A different surname must not become a near-certain match.'
+    Assert-True ((Compare-Names $userEnglish 'Ahmed Mohamed Hussien ElSheemy') -lt 95) 'A shared surname must not erase a different first name.'
+    Assert-True ((Compare-Names 'Ahmed Hassan محمد علي' 'محمد علي') -lt 95) 'Contradictory concatenated aliases must not silently match only one half.'
+    Assert-True ((Compare-Names 'Ahmed Hassan محمد علي' 'Ahmed Hassan') -lt 95) 'Contradictory aliases must not silently match only the English half.'
+    Assert-True ((Compare-Names ($userEnglish + ' شهدي محمد حسين الحسيني') $userArabic) -lt 95) 'A conflicting surname in one bilingual half must retain its penalty.'
+    Assert-True ((Compare-Names ($bilingualName + ' 12') $userArabic) -lt 95) 'An identifier in only one bilingual half must not disappear.'
+    Assert-True ((Compare-Names 'Ahmed Hassan 12 أحمد حسن 13' 'أحمد حسن 13') -lt 95) 'Conflicting identifiers inside bilingual alias halves must prevent a strong match.'
+    Assert-True ((Compare-Names ($userEnglish + ' شهدي محمد حسين') $userEnglish) -lt 95) 'An incomplete Arabic half must not be discarded as a complete alias.'
+    Assert-True ((Compare-Names ($userEnglish + ' شهدي محمد حسين') $userArabic) -lt 95) 'An incomplete bilingual field must retain the missing-surname penalty.'
+    Assert-True ((Compare-Names ($bilingualName + ' 12') ($userArabic + ' 13')) -lt 95) 'Bilingual alias handling must retain different numeric identifiers.'
+    $partialNameScore = Compare-Names 'Shohdy Mohamed Hussien' $userArabic
+    Assert-True ($partialNameScore -lt $fullNameScore) 'A missing surname should score below the full-name match.'
+
     Assert-BadRequest '/IsSame'
     Assert-BadRequest '/IsSame?first_name=Ahmed'
     Assert-BadRequest '/IsSame?first_name=&second_name=Ahmed'
@@ -101,6 +134,8 @@ try {
     Assert-BadRequest ('/IsSame?first_name=' + ('a' * 257) + '&second_name=Ahmed')
     # 127 one-token words fit the character limit but exceed CLS/SEP + 126 name tokens.
     Assert-BadRequest ('/IsSame?first_name=' + [Uri]::EscapeDataString(('a ' * 126) + 'a') + '&second_name=Ahmed')
+    $casedBilingualLimit = (('aHmEd ' * 22) + 'aHmEd') + ' ' + (('احمد ' * 22) + 'احمد')
+    Assert-BadRequest ('/IsSame?first_name=' + [Uri]::EscapeDataString($casedBilingualLimit) + '&second_name=Ahmed')
 
     # All requests are started before awaiting results to exercise concurrent inference.
     $pairs = @(
@@ -115,7 +150,7 @@ try {
         $score = Read-Comparison ($pending[$index].GetAwaiter().GetResult()) $pairs[$index][0] $pairs[$index][1]
         if ($index -eq 0 -or $index -eq 3) { Assert-True ($score -eq $example) 'Concurrent responses were inconsistent.' }
     }
-    Write-Host "Smoke tests passed. shohdi / Arabic equivalent: $example%."
+    Write-Host "Smoke tests passed. shohdi: $example%; full English/Arabic: $fullNameScore%; bilingual/Arabic: $bilingualArabicScore%; bilingual/English: $bilingualEnglishScore%."
 }
 catch {
     if ($null -ne $server) {

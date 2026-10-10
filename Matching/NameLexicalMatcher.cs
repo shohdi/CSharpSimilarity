@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace CSharpSimilarity.Matching;
 
@@ -6,14 +7,21 @@ namespace CSharpSimilarity.Matching;
 public sealed record LexicalMatch(
     double Similarity,
     bool ExactNormalizedMatch,
-    bool CrossScriptPhoneticMatch);
+    bool CrossScriptPhoneticMatch)
+{
+    public bool EquivalentAliasMatch { get; init; }
+    public string? MatchedFirstName { get; init; }
+    public string? MatchedSecondName { get; init; }
+}
 
 /// <summary>
 /// Compares whole name tokens and Arabic/English transliterations locally.
-/// Unmatched tokens reduce the score, including when one name is a subset of the other.
+/// Complete equivalent Arabic/English aliases are compared independently.
+/// Unexplained or unmatched tokens still reduce the score.
 /// </summary>
 public sealed class NameLexicalMatcher
 {
+    private static readonly Regex NameWords = new(@"[\p{L}\p{N}\p{M}\u0640]+", RegexOptions.CultureInvariant);
     // Finite translations of organizational type words. These stay as tokens:
     // a shared company type is not enough to match different company names.
     private static readonly IReadOnlyDictionary<string, string> OrganizationTypes =
@@ -46,11 +54,103 @@ public sealed class NameLexicalMatcher
 
         if (firstNormalized == secondNormalized)
         {
-            return new LexicalMatch(1, true, false);
+            return new LexicalMatch(1, true, false)
+            {
+                MatchedFirstName = first!.Trim(),
+                MatchedSecondName = second!.Trim()
+            };
         }
 
+        var firstVariants = EquivalentVariants(first!);
+        var secondVariants = EquivalentVariants(second!);
+        var usedAliases = firstVariants.Length > 1 || secondVariants.Length > 1;
+        LexicalMatch? best = null;
+        foreach (var firstVariant in firstVariants)
+        {
+            foreach (var secondVariant in secondVariants)
+            {
+                var result = CompareTokens(
+                    PrepareTokens(NameNormalizer.Normalize(firstVariant)),
+                    PrepareTokens(NameNormalizer.Normalize(secondVariant)), out var minimum);
+                var candidate = result with
+                {
+                    EquivalentAliasMatch = usedAliases && minimum >= 0.97,
+                    MatchedFirstName = firstVariant,
+                    MatchedSecondName = secondVariant
+                };
+                if (best is null || candidate.Similarity > best.Similarity + 1e-12 ||
+                    (Math.Abs(candidate.Similarity - best.Similarity) <= 1e-12 && ComparePairKey(candidate, best) < 0))
+                    best = candidate;
+            }
+        }
+        return best!;
+    }
+
+    private static int ComparePairKey(LexicalMatch first, LexicalMatch second)
+    {
+        // Break ties without depending on which input was first, so choosing
+        // model inputs and returning a score both remain symmetric.
+        static string Key(LexicalMatch match)
+        {
+            var a = match.MatchedFirstName!;
+            var b = match.MatchedSecondName!;
+            return string.CompareOrdinal(a, b) <= 0 ? a + "\0" + b : b + "\0" + a;
+        }
+        return string.CompareOrdinal(Key(first), Key(second));
+    }
+
+    private static string[] EquivalentVariants(string original)
+    {
+        var runs = new List<string>();
+        var tokens = new List<string>();
+        var script = 0;
+        foreach (Match word in NameWords.Matches(original))
+        {
+            var token = NameNormalizer.Normalize(word.Value);
+            if (token.Length == 0)
+                continue;
+            // Detect scripts before organization types become canonical Latin
+            // tokens. Digits stay attached to their run and must match twice.
+            var tokenScript = token.All(char.IsDigit) ? 0
+                : IsLatin(token) ? 1
+                : IsArabicToken(token) && NameNormalizer.ContainsArabic(token) ? 2 : -1;
+            if (tokenScript < 0)
+                return [original];
+            if (tokenScript != 0 && tokenScript != script)
+            {
+                if (script != 0)
+                {
+                    runs.Add(string.Join(' ', tokens));
+                    tokens.Clear();
+                }
+                script = tokenScript;
+            }
+            // Preserve original casing and accents for the cased ONNX model.
+            tokens.Add(word.Value);
+        }
+        if (tokens.Count > 0)
+            runs.Add(string.Join(' ', tokens));
+
+        // A mixed record is two aliases only when every token in the complete
+        // English name has a strong counterpart in the complete Arabic name.
+        // Extra people, missing words and conflicting IDs retain full coverage.
+        if (runs.Count != 2)
+            return [original];
+        var firstNormalized = NameNormalizer.Normalize(runs[0]);
+        var secondNormalized = NameNormalizer.Normalize(runs[1]);
         var firstTokens = PrepareTokens(firstNormalized);
         var secondTokens = PrepareTokens(secondNormalized);
+        if (firstTokens.Length != secondTokens.Length ||
+            !string.Concat(firstNormalized.Where(char.IsDigit)).Equals(string.Concat(secondNormalized.Where(char.IsDigit)), StringComparison.Ordinal))
+            return [original];
+        _ = CompareTokens(firstTokens, secondTokens, out var minimum);
+        // Generic edit-distance matches are capped at .92. Require explicit
+        // transliteration evidence (.96-.99) or exact tokens for each word.
+        return minimum >= 0.94 ? runs.ToArray() : [original];
+    }
+
+    private static LexicalMatch CompareTokens(string[] firstTokens, string[] secondTokens, out double minimum)
+    {
         var size = Math.Max(firstTokens.Length, secondTokens.Length);
         var scores = new double[size, size];
         var crossScript = new bool[size, size];
@@ -66,12 +166,14 @@ public sealed class NameLexicalMatcher
 
         var assignment = MaximumAssignment(scores);
         var total = 0d;
+        minimum = 1d;
         var allStrong = firstTokens.Length == secondTokens.Length;
         var anyCrossScript = false;
         for (var row = 0; row < size; row++)
         {
             var column = assignment[row];
             total += scores[row, column];
+            minimum = Math.Min(minimum, scores[row, column]);
             allStrong &= scores[row, column] >= 0.97;
             anyCrossScript |= crossScript[row, column];
         }
@@ -105,13 +207,20 @@ public sealed class NameLexicalMatcher
             var score = editSimilarity;
             if (!firstArabic && IsLatin(first) && IsLatin(second))
             {
+                var firstSkeleton = LatinSkeleton(first);
+                var secondSkeleton = LatinSkeleton(second);
                 if (FinalIToY(first) == FinalIToY(second) && first.Length >= 3)
                 {
                     score = Math.Max(score, 0.96);
                 }
-                else if (editSimilarity >= 0.6 &&
-                         LatinSkeleton(first) == LatinSkeleton(second) &&
-                         LatinSkeleton(first).Length >= 2)
+                else if (firstSkeleton == secondSkeleton && firstSkeleton.Count(char.IsLetter) >= 4 &&
+                         HasLatinArticle(first) && HasLatinArticle(second))
+                {
+                    // Attached El/Al surnames can have very different vowel
+                    // spellings while retaining the same distinctive sounds.
+                    score = Math.Max(score, 0.96);
+                }
+                else if (editSimilarity >= 0.6 && firstSkeleton == secondSkeleton && firstSkeleton.Length >= 2)
                 {
                     score = Math.Max(score, 0.88);
                 }
@@ -282,6 +391,9 @@ public sealed class NameLexicalMatcher
 
     private static string FinalIToY(string value) =>
         value.EndsWith('i') ? value[..^1] + "y" : value;
+
+    private static bool HasLatinArticle(string value) =>
+        value.StartsWith("al", StringComparison.Ordinal) || value.StartsWith("el", StringComparison.Ordinal);
 
     private static string ArabicSkeleton(string value)
     {

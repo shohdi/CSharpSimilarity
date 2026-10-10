@@ -35,9 +35,25 @@ Invoke-RestMethod "http://localhost:5000/IsSame?first_name=$first&second_name=$s
 
 `Percentage` is returned as a string containing an integer from `0` through `100`. The original query values are echoed exactly. Scores are symmetric when the names are swapped.
 
-Normalized identical names score `100`; strong Arabic/English phonetic equivalents score `99`. Other pairs use `85%` spelling/transliteration similarity plus `15%` positive embedding cosine similarity squared, rounded and capped at `98`. These weights are heuristics for short names and can be tuned after evaluation on your data. The Hugging Face model runs for every valid pair.
+Normalized identical names score `100`; strong Arabic/English phonetic equivalents and complete matches against verified bilingual aliases score `99`. Other pairs use `85%` spelling/transliteration similarity plus `15%` positive embedding cosine similarity squared, rounded and capped at `98`. These weights are heuristics for short names and can be tuned after evaluation on your data. The Hugging Face model runs for every valid pair, using original casing for the selected complete names.
 
 Matching tolerates reordered words, common transliteration variants, and detached `Al`/`El` articles. It penalizes missing words and different numeric identifiers. A finite dictionary aligns organization types such as `Company` / `شركة`, `Bank` / `بنك`, and `University` / `جامعة`; it does not provide arbitrary translation or verified organization aliases.
+
+## Bilingual record names
+
+A record may contain the complete English and Arabic forms of the same name in one field. The API compares these as equivalent alternatives after checking that the two complete forms agree, rather than penalizing the record for repeating its name in another script. For example:
+
+```text
+first_name=Shohdy Mohamed Hussien ElSheemy شهدي محمد حسين الشيمي
+second_name=شهدي محمد حسين الشيمي
+Percentage=99
+```
+
+The reverse comparison and matching that bilingual field against its English form also score `99`. Encode each entire query value with `Uri.EscapeDataString` as shown above.
+
+Alias recognition requires two complete Arabic/Latin script runs, equal name-component counts after article handling, matching numeric identifiers, and a strong match for every assigned component. Partial translations, conflicting names, or unexplained extra components retain the full-field mismatch penalty. This is not an unrestricted substring match: adding a different name beside a matching name does not automatically produce `99`. Unrelated aliases of the same entity cannot be inferred from unstructured text; keep distinct source aliases as separate comparisons when they do not represent equivalent full names.
+
+The existing sentence model remains a secondary signal. Model choice and score thresholds should be evaluated against labeled matching and nonmatching records from your own data; the examples and regression tests do not establish an AML screening error rate.
 
 ## Endpoints and validation
 
