@@ -27,3 +27,4 @@ __pycache__/
 publish/
 .env
 .env.*
+tests.txt
