@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="../Inference/WordPieceTokenizer.cs" Link="WordPieceTokenizer.cs" />
+    <Compile Include="../Inference/DenseProjection.cs" Link="DenseProjection.cs" />
+    <Compile Include="../Matching/NameNormalizer.cs" Link="NameNormalizer.cs" />
+    <Compile Include="../Matching/NameLexicalMatcher.cs" Link="NameLexicalMatcher.cs" />
+    <None Include="tokenizer-fixtures.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="dense-fixture.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

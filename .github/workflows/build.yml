@@ -1,0 +1,33 @@
+name: Build and smoke test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 8.0.x
+      - name: Restore dependencies
+        run: dotnet restore CSharpSimilarity.csproj
+      - name: Download verified model assets
+        shell: pwsh
+        run: ./scripts/download-model.ps1
+      - name: Build
+        run: dotnet build CSharpSimilarity.csproj --configuration Release --no-restore
+      - name: Check tokenizer and projection fixtures
+        run: dotnet run --project tests/CSharpSimilarity.Checks.csproj --configuration Release
+      - name: Check API behavior
+        shell: pwsh
+        run: ./scripts/smoke-test.ps1 -StartServer -Configuration Release

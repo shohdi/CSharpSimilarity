@@ -1,0 +1,5 @@
+Model assets live here locally and are excluded from Git. Run `../scripts/download-model.ps1` once to install or repair them. They are verified at startup and copied by `dotnet publish`.
+
+The [original Sentence Transformers model](https://huggingface.co/sentence-transformers/distiluse-base-multilingual-cased-v2) uses cased multilingual DistilBERT, mask-aware mean pooling, a learned 768-to-512 Dense projection with tanh, and cosine similarity. The C# implementation includes all these steps; pooling transformer outputs alone would omit the trained projection.
+
+The quantized transformer and tokenizer come from the [Xenova ONNX export](https://huggingface.co/Xenova/distiluse-base-multilingual-cased-v2/tree/cad454171d918d9873a2701ba245054b6c1760dd). The projection comes from the original model at revision `bfe45d0732ca50787611c0fe107ba278c7f3f889`. The upstream model is Apache-2.0 licensed; this project's MIT license does not replace the model's license. Model attribution and license: [upstream model card](https://huggingface.co/sentence-transformers/distiluse-base-multilingual-cased-v2/blob/bfe45d0732ca50787611c0fe107ba278c7f3f889/README.md).

@@ -1,0 +1,25 @@
+# Build output and local IDE settings
+bin/
+obj/
+.vs/
+.idea/
+.tools/
+*.user
+*.suo
+
+# Model assets are downloaded and verified by scripts/download-model.ps1.
+Models/*.onnx
+Models/*.safetensors
+Models/tokenizer.json
+Models/.*.tmp
+
+# Local Python environments are never required by this project.
+.venv/
+venv/
+__pycache__/
+
+# Temporary output and credentials
+*.log
+publish/
+.env
+.env.*
